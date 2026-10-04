@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { io } from 'socket.io-client'
 import './App.css'
 
@@ -9,10 +9,72 @@ type CalledTicket = {
   priority: string
 }
 
+function playCallSound() {
+  try {
+    const AudioContextClass =
+      window.AudioContext ||
+      (window as typeof window & { webkitAudioContext?: typeof AudioContext })
+        .webkitAudioContext
+
+    if (!AudioContextClass) return
+
+    const context = new AudioContextClass()
+    const now = context.currentTime
+    const gain = context.createGain()
+    gain.connect(context.destination)
+    gain.gain.setValueAtTime(0.0001, now)
+    gain.gain.exponentialRampToValueAtTime(0.22, now + 0.02)
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.85)
+
+    ;[0, 0.28].forEach((delay) => {
+      const oscillator = context.createOscillator()
+      oscillator.type = 'sine'
+      oscillator.frequency.setValueAtTime(880, now + delay)
+      oscillator.connect(gain)
+      oscillator.start(now + delay)
+      oscillator.stop(now + delay + 0.18)
+    })
+
+    window.setTimeout(() => void context.close(), 1200)
+  } catch {
+    // Alguns navegadores/TVs bloqueiam áudio até a primeira interação.
+  }
+}
+
+function speakTicket(ticket: CalledTicket) {
+  if (!('speechSynthesis' in window)) return
+
+  window.speechSynthesis.cancel()
+
+  const readableCode = ticket.code.replace('-', ' ')
+  const message =
+    ticket.counter !== null
+      ? `Senha ${readableCode}. Dirija-se ao guichê ${ticket.counter}.`
+      : `Senha ${readableCode}.`
+
+  const utterance = new SpeechSynthesisUtterance(message)
+  utterance.lang = 'pt-BR'
+  utterance.rate = 0.92
+  utterance.pitch = 1
+  utterance.volume = 1
+
+  const voices = window.speechSynthesis.getVoices()
+  const portugueseVoice = voices.find((voice) =>
+    voice.lang.toLowerCase().startsWith('pt-br'),
+  )
+
+  if (portugueseVoice) utterance.voice = portugueseVoice
+
+  window.speechSynthesis.speak(utterance)
+}
+
 function App() {
   const [connected, setConnected] = useState(false)
   const [ticket, setTicket] = useState<CalledTicket | null>(null)
   const [recentTickets, setRecentTickets] = useState<CalledTicket[]>([])
+  const [calling, setCalling] = useState(false)
+  const highlightTimer = useRef<number | null>(null)
+  const speechTimer = useRef<number | null>(null)
 
   useEffect(() => {
     const socket = io('http://localhost:3000')
@@ -22,19 +84,38 @@ function App() {
 
     socket.on('ticket-called', (calledTicket: CalledTicket) => {
       setTicket(calledTicket)
-      setRecentTickets((current) => [
-        calledTicket,
-        ...current.filter((item) => item.id !== calledTicket.id),
-      ].slice(0, 4))
+      setCalling(true)
+      setRecentTickets((current) =>
+        [
+          calledTicket,
+          ...current.filter((item) => item.id !== calledTicket.id),
+        ].slice(0, 4),
+      )
+
+      if (highlightTimer.current) window.clearTimeout(highlightTimer.current)
+      if (speechTimer.current) window.clearTimeout(speechTimer.current)
+
+      playCallSound()
+
+      speechTimer.current = window.setTimeout(() => {
+        speakTicket(calledTicket)
+      }, 950)
+
+      highlightTimer.current = window.setTimeout(() => {
+        setCalling(false)
+      }, 8000)
     })
 
     return () => {
+      if (highlightTimer.current) window.clearTimeout(highlightTimer.current)
+      if (speechTimer.current) window.clearTimeout(speechTimer.current)
+      window.speechSynthesis?.cancel()
       socket.disconnect()
     }
   }, [])
 
   return (
-    <main className="panel">
+    <main className={`panel ${calling ? 'is-calling' : ''}`}>
       <header className="topbar">
         <div className="brand">
           <div className="brand-mark">BT</div>
@@ -57,6 +138,14 @@ function App() {
             <div className="media-logo">BTDigital</div>
             <p>Seus vídeos e anúncios serão exibidos neste espaço.</p>
           </div>
+
+          {calling && ticket && (
+            <div className="call-overlay" aria-live="assertive">
+              <span>ATENÇÃO • NOVA CHAMADA</span>
+              <strong>{ticket.code}</strong>
+              <p>Guichê {ticket.counter ?? '-'}</p>
+            </div>
+          )}
         </section>
 
         <aside className="call-column">
@@ -64,7 +153,7 @@ function App() {
             {ticket ? 'CHAMADA ATUAL' : 'AGUARDANDO CHAMADA'}
           </p>
 
-          <section className={`call-card ${ticket ? 'active' : ''}`}>
+          <section className={`call-card ${ticket ? 'active' : ''} ${calling ? 'calling' : ''}`}>
             {ticket ? (
               <>
                 <span className="service-type">
