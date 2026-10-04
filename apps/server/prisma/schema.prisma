@@ -1,0 +1,36 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+enum TicketStatus {
+  WAITING
+  CALLED
+  SERVING
+  FINISHED
+  CANCELLED
+}
+
+enum TicketPriority {
+  NORMAL
+  PRIORITY
+}
+
+model Ticket {
+  id         Int            @id @default(autoincrement())
+  number     Int
+  code       String         @unique
+  status     TicketStatus   @default(WAITING)
+  priority   TicketPriority @default(NORMAL)
+
+  counter    Int?
+
+  createdAt  DateTime       @default(now())
+  calledAt   DateTime?
+  startedAt  DateTime?
+  finishedAt DateTime?
+}
