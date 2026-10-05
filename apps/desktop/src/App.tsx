@@ -1,121 +1,233 @@
-import { useState } from 'react'
-import heroImg from './assets/hero.png'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import './App.css'
 
+type TicketStatus = 'WAITING' | 'CALLED' | 'SERVING' | 'FINISHED' | 'CANCELLED'
+type TicketPriority = 'NORMAL' | 'PRIORITY'
+
+type Ticket = {
+  id: number
+  number: number
+  code: string
+  status: TicketStatus
+  priority: TicketPriority
+  counter: number | null
+  createdAt: string
+  calledAt: string | null
+  startedAt: string | null
+  finishedAt: string | null
+}
+
+const API_URL = 'http://localhost:3000'
+
 function App() {
-  const [count, setCount] = useState(0)
+  const [tickets, setTickets] = useState<Ticket[]>([])
+  const [counter, setCounter] = useState(1)
+  const [busy, setBusy] = useState(false)
+  const [connected, setConnected] = useState(false)
+  const [message, setMessage] = useState('Pronto para atender')
+
+  const loadTickets = useCallback(async () => {
+    try {
+      const response = await fetch(`${API_URL}/tickets`)
+      if (!response.ok) throw new Error('Falha ao carregar a fila')
+      const data = (await response.json()) as Ticket[]
+      setTickets(data)
+      setConnected(true)
+    } catch {
+      setConnected(false)
+      setMessage('Servidor indisponível')
+    }
+  }, [])
+
+  useEffect(() => {
+    void loadTickets()
+    const timer = window.setInterval(() => void loadTickets(), 2000)
+    return () => window.clearInterval(timer)
+  }, [loadTickets])
+
+  const waiting = useMemo(
+    () => tickets.filter((ticket) => ticket.status === 'WAITING'),
+    [tickets],
+  )
+
+  const current = useMemo(
+    () =>
+      [...tickets]
+        .reverse()
+        .find(
+          (ticket) =>
+            ticket.counter === counter &&
+            (ticket.status === 'CALLED' || ticket.status === 'SERVING'),
+        ) ?? null,
+    [tickets, counter],
+  )
+
+  async function request(path: string, method: 'POST' | 'PATCH') {
+    setBusy(true)
+    try {
+      const response = await fetch(`${API_URL}${path}`, { method })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data?.message ?? 'Erro na operação')
+      if (data?.message && !data?.code) setMessage(data.message)
+      await loadTickets()
+      return data as Ticket | { message: string }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Erro na operação')
+      return null
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function callNext() {
+    if (current) {
+      setMessage('Finalize a senha atual antes de chamar outra.')
+      return
+    }
+    const result = await request(`/tickets/call-next/${counter}`, 'POST')
+    if (result && 'code' in result) setMessage(`Senha ${result.code} chamada`)
+  }
+
+  async function startService() {
+    if (!current) return
+    const result = await request(`/tickets/${current.id}/start`, 'PATCH')
+    if (result && 'code' in result) setMessage(`Atendimento ${result.code} iniciado`)
+  }
+
+  async function finishService() {
+    if (!current) return
+    const result = await request(`/tickets/${current.id}/finish`, 'PATCH')
+    if (result && 'code' in result) setMessage(`Atendimento ${result.code} finalizado`)
+  }
+
+  const normalCount = waiting.filter((ticket) => ticket.priority === 'NORMAL').length
+  const priorityCount = waiting.filter((ticket) => ticket.priority === 'PRIORITY').length
 
   return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
+    <main className="app-shell">
+      <header className="topbar">
+        <div className="brand">
+          <div className="brand-mark">BT</div>
+          <div>
+            <strong>BTDigital Fila</strong>
+            <span>Central do atendente</span>
+          </div>
         </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.tsx</code> and save to test <code>HMR</code>
-          </p>
+
+        <div className={`connection ${connected ? 'online' : 'offline'}`}>
+          <i />
+          {connected ? 'Sistema conectado' : 'Servidor desconectado'}
         </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
+      </header>
+
+      <section className="content">
+        <div className="page-heading">
+          <div>
+            <span className="eyebrow">ATENDIMENTO</span>
+            <h1>Controle de fila</h1>
+            <p>Chame e acompanhe as senhas do seu guichê.</p>
+          </div>
+
+          <label className="counter-select">
+            <span>Guichê</span>
+            <select value={counter} onChange={(event) => setCounter(Number(event.target.value))}>
+              {[1, 2, 3, 4, 5].map((value) => (
+                <option key={value} value={value}>{value}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        <div className="stats">
+          <article>
+            <span>Na fila</span>
+            <strong>{waiting.length}</strong>
+          </article>
+          <article>
+            <span>Preferenciais</span>
+            <strong>{priorityCount}</strong>
+          </article>
+          <article>
+            <span>Normais</span>
+            <strong>{normalCount}</strong>
+          </article>
+        </div>
+
+        <div className="workspace">
+          <section className="service-card">
+            <div className="card-title">
+              <span>SENHA ATUAL</span>
+              <em>{current?.status === 'SERVING' ? 'Em atendimento' : current ? 'Chamada' : 'Guichê livre'}</em>
+            </div>
+
+            <div className={`current-ticket ${current ? '' : 'empty'}`}>
+              <small>{current ? `GUICHÊ ${counter}` : 'AGUARDANDO'}</small>
+              <strong>{current?.code ?? '---'}</strong>
+              <p>
+                {current
+                  ? current.priority === 'PRIORITY'
+                    ? 'Atendimento preferencial'
+                    : 'Atendimento normal'
+                  : 'Chame a próxima senha para começar'}
+              </p>
+            </div>
+
+            <button className="primary-button" disabled={busy || !!current || !connected} onClick={() => void callNext()}>
+              <span className="bell">⌁</span>
+              CHAMAR PRÓXIMO
+            </button>
+
+            <div className="secondary-actions">
+              <button
+                disabled={busy || !current || current.status !== 'CALLED'}
+                onClick={() => void startService()}
+              >
+                Iniciar atendimento
+              </button>
+              <button
+                className="finish"
+                disabled={busy || !current || current.status !== 'SERVING'}
+                onClick={() => void finishService()}
+              >
+                Finalizar atendimento
+              </button>
+            </div>
+
+            <div className="status-message">{message}</div>
+          </section>
+
+          <section className="queue-card">
+            <div className="queue-header">
+              <div>
+                <span>FILA AGUARDANDO</span>
+                <h2>Próximas senhas</h2>
+              </div>
+              <b>{waiting.length}</b>
+            </div>
+
+            <div className="queue-list">
+              {waiting.length === 0 ? (
+                <div className="empty-queue">
+                  <strong>Fila vazia</strong>
+                  <span>Novas senhas aparecerão aqui automaticamente.</span>
+                </div>
+              ) : (
+                waiting.map((ticket, index) => (
+                  <article key={ticket.id} className={ticket.priority === 'PRIORITY' ? 'priority' : ''}>
+                    <div className="position">{String(index + 1).padStart(2, '0')}</div>
+                    <div className="ticket-info">
+                      <strong>{ticket.code}</strong>
+                      <span>{ticket.priority === 'PRIORITY' ? 'Preferencial' : 'Normal'}</span>
+                    </div>
+                    <span className="badge">{ticket.priority === 'PRIORITY' ? 'P' : 'N'}</span>
+                  </article>
+                ))
+              )}
+            </div>
+          </section>
+        </div>
       </section>
-
-      <div className="ticks"></div>
-
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
-
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
+    </main>
   )
 }
 
