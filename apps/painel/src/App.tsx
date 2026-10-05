@@ -134,9 +134,11 @@ function App() {
       <section className="dashboard">
         <section className="media-card">
           <div className="media-overlay">
-            <span className="media-badge">MÍDIA INSTITUCIONAL</span>
-            <div className="media-logo">BTDigital</div>
-            <p>Seus vídeos e anúncios serão exibidos neste espaço.</p>
+            <img
+              className="advertisement"
+              src="/anuncio-lanchonete.png"
+              alt="Anúncio da lanchonete"
+            />
           </div>
 
           {calling && ticket && (
