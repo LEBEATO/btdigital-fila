@@ -28,10 +28,9 @@ function App() {
 
   const loadTickets = useCallback(async () => {
     try {
-      const response = await fetch(`${API_URL}/tickets`)
+      const response = await fetch(`${API_URL}/tickets`, { cache: 'no-store' })
       if (!response.ok) throw new Error('Falha ao carregar a fila')
-      const data = (await response.json()) as Ticket[]
-      setTickets(data)
+      setTickets((await response.json()) as Ticket[])
       setConnected(true)
     } catch {
       setConnected(false)
@@ -41,26 +40,40 @@ function App() {
 
   useEffect(() => {
     void loadTickets()
-    const timer = window.setInterval(() => void loadTickets(), 2000)
-    return () => window.clearInterval(timer)
+    const timer = window.setInterval(() => void loadTickets(), 1000)
+    const refresh = () => void loadTickets()
+    window.addEventListener('focus', refresh)
+    return () => {
+      window.clearInterval(timer)
+      window.removeEventListener('focus', refresh)
+    }
   }, [loadTickets])
+
+  useEffect(() => {
+    void loadTickets()
+    setMessage(`Guichê ${counter} selecionado`)
+  }, [counter, loadTickets])
 
   const waiting = useMemo(
     () => tickets.filter((ticket) => ticket.status === 'WAITING'),
     [tickets],
   )
 
-  const current = useMemo(
-    () =>
-      [...tickets]
-        .reverse()
-        .find(
-          (ticket) =>
-            ticket.counter === counter &&
-            (ticket.status === 'CALLED' || ticket.status === 'SERVING'),
-        ) ?? null,
-    [tickets, counter],
-  )
+  const current = useMemo(() => {
+    const active = tickets.filter(
+      (ticket) =>
+        ticket.counter === counter &&
+        (ticket.status === 'CALLED' || ticket.status === 'SERVING'),
+    )
+
+    return (
+      active.sort((a, b) => {
+        const aTime = new Date(a.calledAt ?? a.createdAt).getTime()
+        const bTime = new Date(b.calledAt ?? b.createdAt).getTime()
+        return bTime - aTime
+      })[0] ?? null
+    )
+  }, [tickets, counter])
 
   async function request(path: string, method: 'POST' | 'PATCH') {
     setBusy(true)
@@ -81,11 +94,11 @@ function App() {
 
   async function callNext() {
     if (current) {
-      setMessage('Finalize a senha atual antes de chamar outra.')
+      setMessage(`Finalize a senha ${current.code} antes de chamar outra.`)
       return
     }
     const result = await request(`/tickets/call-next/${counter}`, 'POST')
-    if (result && 'code' in result) setMessage(`Senha ${result.code} chamada`)
+    if (result && 'code' in result) setMessage(`Senha ${result.code} chamada no guichê ${counter}`)
   }
 
   async function startService() {
@@ -97,11 +110,21 @@ function App() {
   async function finishService() {
     if (!current) return
     const result = await request(`/tickets/${current.id}/finish`, 'PATCH')
-    if (result && 'code' in result) setMessage(`Atendimento ${result.code} finalizado`)
+    if (result && 'code' in result) setMessage(`Atendimento ${result.code} finalizado. Guichê livre.`)
   }
 
   const normalCount = waiting.filter((ticket) => ticket.priority === 'NORMAL').length
   const priorityCount = waiting.filter((ticket) => ticket.priority === 'PRIORITY').length
+
+  const currentDescription = current
+    ? current.status === 'SERVING'
+      ? current.priority === 'PRIORITY'
+        ? 'Preferencial • em atendimento'
+        : 'Normal • em atendimento'
+      : current.priority === 'PRIORITY'
+        ? 'Preferencial • aguardando início'
+        : 'Normal • aguardando início'
+    : 'Chame a próxima senha para começar'
 
   return (
     <main className="app-shell">
@@ -113,7 +136,6 @@ function App() {
             <span>Central do atendente</span>
           </div>
         </div>
-
         <div className={`connection ${connected ? 'online' : 'offline'}`}>
           <i />
           {connected ? 'Sistema conectado' : 'Servidor desconectado'}
@@ -139,18 +161,9 @@ function App() {
         </div>
 
         <div className="stats">
-          <article>
-            <span>Na fila</span>
-            <strong>{waiting.length}</strong>
-          </article>
-          <article>
-            <span>Preferenciais</span>
-            <strong>{priorityCount}</strong>
-          </article>
-          <article>
-            <span>Normais</span>
-            <strong>{normalCount}</strong>
-          </article>
+          <article><span>Na fila</span><strong>{waiting.length}</strong></article>
+          <article><span>Preferenciais</span><strong>{priorityCount}</strong></article>
+          <article><span>Normais</span><strong>{normalCount}</strong></article>
         </div>
 
         <div className="workspace">
@@ -161,15 +174,9 @@ function App() {
             </div>
 
             <div className={`current-ticket ${current ? '' : 'empty'}`}>
-              <small>{current ? `GUICHÊ ${counter}` : 'AGUARDANDO'}</small>
+              <small>{current ? `GUICHÊ ${counter}` : `GUICHÊ ${counter} • LIVRE`}</small>
               <strong>{current?.code ?? '---'}</strong>
-              <p>
-                {current
-                  ? current.priority === 'PRIORITY'
-                    ? 'Atendimento preferencial'
-                    : 'Atendimento normal'
-                  : 'Chame a próxima senha para começar'}
-              </p>
+              <p>{currentDescription}</p>
             </div>
 
             <button className="primary-button" disabled={busy || !!current || !connected} onClick={() => void callNext()}>
@@ -178,17 +185,10 @@ function App() {
             </button>
 
             <div className="secondary-actions">
-              <button
-                disabled={busy || !current || current.status !== 'CALLED'}
-                onClick={() => void startService()}
-              >
+              <button disabled={busy || !current || current.status !== 'CALLED'} onClick={() => void startService()}>
                 Iniciar atendimento
               </button>
-              <button
-                className="finish"
-                disabled={busy || !current || current.status !== 'SERVING'}
-                onClick={() => void finishService()}
-              >
+              <button className="finish" disabled={busy || !current || current.status !== 'SERVING'} onClick={() => void finishService()}>
                 Finalizar atendimento
               </button>
             </div>
@@ -198,10 +198,7 @@ function App() {
 
           <section className="queue-card">
             <div className="queue-header">
-              <div>
-                <span>FILA AGUARDANDO</span>
-                <h2>Próximas senhas</h2>
-              </div>
+              <div><span>FILA AGUARDANDO</span><h2>Próximas senhas</h2></div>
               <b>{waiting.length}</b>
             </div>
 
