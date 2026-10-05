@@ -15,60 +15,51 @@ export class TicketsService {
     const prefix = priority === 'PRIORITY' ? 'P' : 'A';
 
     const lastTicket = await this.prisma.ticket.findFirst({
-      where: {
-        priority,
-      },
-      orderBy: {
-        number: 'desc',
-      },
+      where: { priority },
+      orderBy: { number: 'desc' },
     });
 
     const nextNumber = (lastTicket?.number ?? 0) + 1;
     const code = `${prefix}-${String(nextNumber).padStart(3, '0')}`;
 
     return this.prisma.ticket.create({
-      data: {
-        number: nextNumber,
-        code,
-        status: 'WAITING',
-        priority,
-      },
+      data: { number: nextNumber, code, status: 'WAITING', priority },
     });
   }
 
   async findAll() {
     return this.prisma.ticket.findMany({
-      orderBy: {
-        createdAt: 'asc',
-      },
+      orderBy: { createdAt: 'asc' },
     });
   }
 
   async callNext(counter: number) {
-    const priorityTicket = await this.prisma.ticket.findFirst({
+    const activeTicket = await this.prisma.ticket.findFirst({
       where: {
-        status: 'WAITING',
-        priority: 'PRIORITY',
+        counter,
+        status: { in: ['CALLED', 'SERVING'] },
       },
-      orderBy: {
-        createdAt: 'asc',
-      },
+      orderBy: { calledAt: 'desc' },
+    });
+
+    if (activeTicket) {
+      return {
+        message: `O guichê ${counter} já possui a senha ${activeTicket.code} em andamento.`,
+      };
+    }
+
+    const priorityTicket = await this.prisma.ticket.findFirst({
+      where: { status: 'WAITING', priority: 'PRIORITY' },
+      orderBy: { createdAt: 'asc' },
     });
 
     const normalTicket = await this.prisma.ticket.findFirst({
-      where: {
-        status: 'WAITING',
-        priority: 'NORMAL',
-      },
-      orderBy: {
-        createdAt: 'asc',
-      },
+      where: { status: 'WAITING', priority: 'NORMAL' },
+      orderBy: { createdAt: 'asc' },
     });
 
     if (!priorityTicket && !normalTicket) {
-      return {
-        message: 'Não há senhas aguardando atendimento.',
-      };
+      return { message: 'Não há senhas aguardando atendimento.' };
     }
 
     let nextTicket;
@@ -89,80 +80,41 @@ export class TicketsService {
     }
 
     const calledTicket = await this.prisma.ticket.update({
-      where: {
-        id: nextTicket.id,
-      },
-      data: {
-        status: 'CALLED',
-        counter,
-        calledAt: new Date(),
-      },
+      where: { id: nextTicket.id },
+      data: { status: 'CALLED', counter, calledAt: new Date() },
     });
 
     this.ticketsGateway.emitTicketCalled(calledTicket);
-
     return calledTicket;
   }
 
   async startService(id: number) {
-    const ticket = await this.prisma.ticket.findUnique({
-      where: {
-        id,
-      },
-    });
+    const ticket = await this.prisma.ticket.findUnique({ where: { id } });
 
-    if (!ticket) {
-      return {
-        message: 'Senha não encontrada.',
-      };
-    }
+    if (!ticket) return { message: 'Senha não encontrada.' };
 
     if (ticket.status !== 'CALLED') {
-      return {
-        message:
-          'Esta senha precisa estar chamada antes de iniciar o atendimento.',
-      };
+      return { message: 'Esta senha precisa estar chamada antes de iniciar o atendimento.' };
     }
 
     return this.prisma.ticket.update({
-      where: {
-        id,
-      },
-      data: {
-        status: 'SERVING',
-        startedAt: new Date(),
-      },
+      where: { id },
+      data: { status: 'SERVING', startedAt: new Date() },
     });
   }
 
   async finishService(id: number) {
-    const ticket = await this.prisma.ticket.findUnique({
-      where: {
-        id,
-      },
-    });
+    const ticket = await this.prisma.ticket.findUnique({ where: { id } });
 
-    if (!ticket) {
-      return {
-        message: 'Senha não encontrada.',
-      };
-    }
+    if (!ticket) return { message: 'Senha não encontrada.' };
 
     if (ticket.status !== 'SERVING') {
-      return {
-        message:
-          'Esta senha precisa estar em atendimento antes de ser finalizada.',
-      };
+      return { message: 'Esta senha precisa estar em atendimento antes de ser finalizada.' };
     }
 
     return this.prisma.ticket.update({
-      where: {
-        id,
-      },
-      data: {
-        status: 'FINISHED',
-        finishedAt: new Date(),
-      },
+      where: { id },
+      data: { status: 'FINISHED', finishedAt: new Date() },
     });
   }
 }
